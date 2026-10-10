@@ -13,6 +13,12 @@ Prototype: research your Obsidian vault with ChatGPT, on desktop **and iOS**, bi
 - **`check_prism`** opens a note so Prism renders it, then reports block statuses and errors from `.prism/errors.json`. It replaces the command-line render loop of the Prism skill.
 - Answers cite notes as links that open in Obsidian.
 
+## Bundled skills
+
+`skills/` holds skills offered under *Install skills*, installed from this repository on GitHub:
+
+- `okf-notes`: notes that follow the [Open Knowledge Format](https://github.com/GoogleCloudPlatform/open-knowledge-format) (OKF 0.2). It loads the vault's `AGENTS.md` or `CLAUDE.md`, so local conventions take precedence over the OKF baseline.
+
 ## Design notes
 
 - **Tokens are stored per device** in the vault's `localStorage` (`App.saveLocalStorage`), never in `data.json`. Refresh tokens rotate on every refresh, so a session synced between devices would log the devices out of each other. Each device signs in once with its own `ext_agent_host_id`.

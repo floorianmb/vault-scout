@@ -39,6 +39,11 @@ export const SKILL_CATALOG = [
 		description: "Interactive charts, diagrams and formulas in notes with the Prism plugin.",
 		source: "https://github.com/floorianmb/prism-viz/tree/main/skill",
 	},
+	{
+		name: "okf-notes",
+		description: "Notes that follow the Open Knowledge Format (OKF 0.2) and the vault's own conventions.",
+		source: "https://github.com/floorianmb/vault-scout/tree/main/skills/okf-notes",
+	},
 ];
 
 interface GitHubSource {
