@@ -1,4 +1,4 @@
-import { Plugin } from "obsidian";
+import { Platform, Plugin } from "obsidian";
 import { ChatGPTAuth } from "./auth";
 import { ChatStore } from "./chats";
 import { InstallSkillsModal } from "./install-skills-modal";
@@ -73,9 +73,10 @@ export default class VaultScoutPlugin extends Plugin {
 		await this.saveData(this.settings);
 	}
 
-	private async openChat(): Promise<ChatView | undefined> {
+	async openChat(): Promise<ChatView | undefined> {
 		const existing = this.app.workspace.getLeavesOfType(VIEW_TYPE_CHAT)[0];
-		const leaf = existing ?? this.app.workspace.getRightLeaf(false);
+		// On phones and tablets a sidebar drawer is hard to find and cramped for typing; use a tab.
+		const leaf = existing ?? (Platform.isMobile ? this.app.workspace.getLeaf("tab") : this.app.workspace.getRightLeaf(false));
 		if (!leaf) return undefined;
 		if (!existing) await leaf.setViewState({ type: VIEW_TYPE_CHAT, active: true });
 		await this.app.workspace.revealLeaf(leaf);

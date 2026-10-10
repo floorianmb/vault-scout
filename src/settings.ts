@@ -46,6 +46,11 @@ export class VaultScoutSettingTab extends PluginSettingTab {
 				heading: "ChatGPT account",
 				items: [
 					{
+						name: "Open chat",
+						desc: "Also in the command palette (Vault Scout: Open chat) and as the telescope icon in the ribbon.",
+						action: () => void this.plugin.openChat(),
+					},
+					{
 						name: connection ? `Connected as ${connection.email ?? connection.name ?? "ChatGPT user"}` : "Not connected",
 						desc: "Requests use your ChatGPT Plus or Pro plan. The sign-in is stored on this device only and is not synced.",
 						render: (setting) => {

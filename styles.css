@@ -6,6 +6,12 @@
 	padding: var(--size-4-2);
 }
 
+/* Phones: keep the composer above Obsidian's floating navigation bar. The
+   variable covers the bar and the safe area and shrinks while the keyboard is open. */
+.is-phone .vault-scout {
+	padding-bottom: max(var(--size-4-2), calc(var(--view-bottom-spacing, 0px) + var(--size-4-2)));
+}
+
 .vault-scout-header {
 	display: flex;
 	align-items: center;
@@ -124,7 +130,6 @@
 
 .vault-scout-callback-input {
 	width: 100%;
-	min-height: 5em;
 	margin-top: var(--size-4-3);
 	font-family: var(--font-monospace);
 	font-size: var(--font-ui-smaller);
@@ -132,6 +137,7 @@
 
 .vault-scout-modal-buttons {
 	display: flex;
+	flex-wrap: wrap;
 	justify-content: flex-end;
 	gap: var(--size-4-2);
 	margin-top: var(--size-4-2);
@@ -165,4 +171,8 @@
 	background: rgba(var(--color-red-rgb), 0.15);
 	text-decoration: line-through;
 	color: var(--text-muted);
+}
+
+.vault-scout-modal-buttons.is-start {
+	justify-content: flex-start;
 }
