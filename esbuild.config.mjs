@@ -25,6 +25,9 @@ const context = await esbuild.context({
 		...builtinModules.map((m) => `node:${m}`),
 	],
 	format: "cjs",
+	// Lower import() to require(): the Obsidian renderer cannot resolve a native
+	// import() of Node modules such as "https" (desktop-only, behind Platform.isDesktop).
+	supported: { "dynamic-import": false },
 	target: "es2021",
 	logLevel: "info",
 	sourcemap: prod ? false : "inline",

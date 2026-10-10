@@ -11,7 +11,7 @@
 		"isolatedModules": true,
 		"importHelpers": true,
 		"skipLibCheck": true,
-		"types": []
+		"types": ["node"]
 	},
 	"include": ["src/**/*.ts"]
 }

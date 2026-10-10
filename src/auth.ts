@@ -311,13 +311,15 @@ export class ChatGPTAuth {
 		return asString(this.app.loadLocalStorage(KEY_CLIENT));
 	}
 
-	/** Stable per device and vault, as the flow requires one ID per host. */
+	/**
+	 * Stable per device and vault, as the flow requires one ID per host. Same
+	 * `urn:uuid:` form as OpenAI's devkit; the authorize endpoint rejects others.
+	 */
 	private hostId(): string {
-		let id = asString(this.app.loadLocalStorage(KEY_HOST));
-		if (!id) {
-			id = crypto.randomUUID();
-			this.app.saveLocalStorage(KEY_HOST, id);
-		}
+		const saved = asString(this.app.loadLocalStorage(KEY_HOST));
+		if (saved?.startsWith("urn:uuid:")) return saved;
+		const id = `urn:uuid:${saved && /^[0-9a-f-]{36}$/.test(saved) ? saved : crypto.randomUUID()}`;
+		this.app.saveLocalStorage(KEY_HOST, id);
 		return id;
 	}
 }

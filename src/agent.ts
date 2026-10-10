@@ -1,15 +1,23 @@
 import { ChatGPTAuth } from "./auth";
+import type { ChatTurn } from "./chats";
 import { asString, JsonRecord } from "./json";
 import { ApiError, streamResponse, TurnResult } from "./openai";
 import { ToolCall, VaultTools } from "./tools";
 
 const MAX_ROUNDS = 16;
+/** Tool results older than the last few are shortened to keep long chats within the context window. */
+const KEEP_TOOL_RESULTS = 8;
+const OLD_RESULT_LIMIT = 1500;
+/** Tools without side effects; several of them in one round run in parallel. */
+const READ_ONLY = new Set(["search_notes", "read_note", "list_folder", "get_links", "read_skill_file", "load_skill"]);
 
 const INSTRUCTIONS = `You are Vault Scout, a research assistant inside the user's Obsidian vault.
 - Before answering questions about the user's knowledge, search and read the relevant notes with your tools. Do several searches with different keywords (German and English) when the first one finds little.
-- Index notes (index.md) and frontmatter descriptions summarize folders; use them to orient yourself.
+- The vault overview below shows the folders and the root index. Use it instead of listing the root or reading the root index.md again. Folder index notes (index.md) and frontmatter descriptions summarize the rest.
+- Call independent read tools together in one turn; they run in parallel. Do not re-read a note you already read in this chat unless it changed.
 - Cite every note you rely on as a Markdown link with its vault path, URL-encoding spaces, e.g. [Title](Folder/My%20Note.md).
 - Clearly separate what the notes say from your own general knowledge. If the notes do not cover something, say so.
+- You can create and change notes. Every change is shown to the user for approval. Prefer small edit_note changes over rewriting, and never change existing text of the user unless asked. If the user rejects a change, do not retry it unchanged.
 - Answer in the user's language, concisely, in Markdown.`;
 
 export interface AgentEvents {
@@ -25,21 +33,50 @@ export interface AgentEvents {
 export class Agent {
 	private history: JsonRecord[] = [];
 	private sendReasoning = true;
+	/** Loaded skills, kept in the instructions so they are never shortened or loaded twice. */
+	private skills = new Map<string, string>();
 
 	constructor(private auth: ChatGPTAuth, private tools: VaultTools) {}
 
 	reset(): void {
 		this.history = [];
+		this.skills.clear();
+	}
+
+	loadedSkills(): string[] {
+		return [...this.skills.keys()];
+	}
+
+	/** Continues a saved chat. Tool calls are not saved, so only questions, answers and loaded skills return. */
+	async load(turns: ChatTurn[], skills: string[]): Promise<void> {
+		this.reset();
+		this.history = turns.flatMap((turn) => [
+			{ role: "user", content: turn.user },
+			...(turn.answer ? [{ role: "assistant", content: turn.answer }] : []),
+		]);
+		for (const name of skills) await this.loadSkill(name);
 	}
 
 	async send(text: string, model: string, extraInstructions: string, events: AgentEvents, signal: AbortSignal): Promise<string | undefined> {
 		this.history.push({ role: "user", content: text });
-		const instructions = extraInstructions.trim() ? `${INSTRUCTIONS}\n\n${extraInstructions.trim()}` : INSTRUCTIONS;
+		const overview = await this.tools.overview();
+		const instructions = () =>
+			[
+				INSTRUCTIONS,
+				`Current time (UTC): ${new Date().toISOString().slice(0, 19)}Z. Model: ${model}.`,
+				overview,
+				this.tools.skillsPrompt(this.loadedSkills()),
+				...[...this.skills].map(([name, body]) => `# Loaded skill: ${name}\n\n${body}`),
+				extraInstructions.trim(),
+			]
+				.filter(Boolean)
+				.join("\n\n");
 
 		for (let round = 0; round < MAX_ROUNDS; round++) {
+			this.compact();
 			const result = await this.request({
 				model,
-				instructions,
+				instructions: instructions(),
 				input: this.history,
 				tools: this.tools.definitions(),
 				...(this.sendReasoning ? { include: ["reasoning.encrypted_content"] } : {}),
@@ -54,15 +91,38 @@ export class Agent {
 			events.onRoundEnd();
 			if (!calls.length) return result.incompleteReason;
 
-			for (const item of calls) {
-				const call = this.tools.parse(asString(item.name) ?? "", asString(item.arguments) ?? "{}");
-				events.onTool(call);
-				const output = await this.tools.execute(call);
-				signal.throwIfAborted();
-				this.history.push({ type: "function_call_output", call_id: item.call_id, output });
-			}
+			const parsed = calls.map((item) => ({ item, call: this.tools.parse(asString(item.name) ?? "", asString(item.arguments) ?? "{}") }));
+			for (const { call } of parsed) events.onTool(call);
+			const outputs = parsed.every(({ call }) => READ_ONLY.has(call.name))
+				? await Promise.all(parsed.map(({ call }) => this.execute(call)))
+				: await sequential(parsed.map(({ call }) => () => this.execute(call)));
+			signal.throwIfAborted();
+			parsed.forEach(({ item }, i) => this.history.push({ type: "function_call_output", call_id: item.call_id, output: outputs[i] }));
 		}
 		return "max_tool_rounds";
+	}
+
+	private async execute(call: ToolCall): Promise<string> {
+		if (call.name !== "load_skill") return this.tools.execute(call);
+		const name = asString(call.args.name) ?? "";
+		if (this.skills.has(name)) return JSON.stringify({ already_loaded: name });
+		const loaded = await this.loadSkill(name);
+		return JSON.stringify(loaded ? { loaded, note: "Its instructions are now part of your instructions. Follow them." } : { error: "Unknown skill." });
+	}
+
+	private async loadSkill(name: string): Promise<string | undefined> {
+		const skill = await this.tools.skillText(name);
+		if (skill) this.skills.set(skill.name, skill.text);
+		return skill?.name;
+	}
+
+	private compact() {
+		const results = this.history.filter((item) => item.type === "function_call_output");
+		for (const item of results.slice(0, -KEEP_TOOL_RESULTS)) {
+			if (typeof item.output === "string" && item.output.length > OLD_RESULT_LIMIT) {
+				item.output = `${item.output.slice(0, OLD_RESULT_LIMIT)}… [shortened; call the tool again if you need the rest]`;
+			}
+		}
 	}
 
 	private async request(body: JsonRecord, events: AgentEvents, signal: AbortSignal, retried = false): Promise<TurnResult> {
@@ -101,4 +161,10 @@ export class Agent {
 				return undefined;
 		}
 	}
+}
+
+async function sequential<T>(tasks: (() => Promise<T>)[]): Promise<T[]> {
+	const results: T[] = [];
+	for (const task of tasks) results.push(await task());
+	return results;
 }

@@ -1,4 +1,4 @@
-import { requestUrl } from "obsidian";
+import { Platform, requestUrl } from "obsidian";
 import { asRecord, asString, JsonRecord, parseJson } from "./json";
 
 // https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference
@@ -43,10 +43,22 @@ export interface TurnResult {
 	incompleteReason?: string;
 }
 
+/** Why answers arrive at once instead of streaming, if they do. */
+export function streamingUnavailableReason(): string | undefined {
+	return canStream() ? undefined : "the mobile app cannot stream plan-usage responses yet";
+}
+
+function canStream(): boolean {
+	return Platform.isDesktop && Platform.isDesktopApp;
+}
+
 /**
- * One streamed Responses API call. Plan usage requires `stream: true` and
- * `store: false`. Uses fetch rather than requestUrl, which cannot stream; the
- * API allows cross-origin requests, also from the mobile app.
+ * One Responses API call with plan usage (`stream: true`, `store: false`).
+ *
+ * Successful plan-usage responses carry no CORS header (error responses do),
+ * so the WebView blocks `fetch`. The desktop app therefore streams through
+ * Node's https module, which has no CORS. The mobile app has no Node and its
+ * requestUrl cannot stream, so there the whole event stream arrives at once.
  */
 export async function streamResponse(
 	token: string,
@@ -54,49 +66,81 @@ export async function streamResponse(
 	onTextDelta: (delta: string) => void,
 	signal: AbortSignal,
 ): Promise<TurnResult> {
-	// Deliberately fetch (lint warning): requestUrl buffers the whole body, and plan usage requires streaming.
-	const response = await fetch(`${API}/responses`, {
-		method: "POST",
-		headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", Accept: "text/event-stream" },
-		body: JSON.stringify({ ...body, stream: true, store: false }),
-		signal,
+	const url = `${API}/responses`;
+	const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json", Accept: "text/event-stream" };
+	const payload = JSON.stringify({ ...body, stream: true, store: false });
+	const parser = new EventParser(onTextDelta);
+
+	if (canStream()) {
+		await streamWithNode(url, headers, payload, parser, signal);
+		return parser.result();
+	}
+	const response = await requestUrl({ url, method: "POST", headers, body: payload, throw: false });
+	signal.throwIfAborted();
+	if (response.status >= 400) throw apiError(parseJson(response.text), response.status);
+	parser.consume(response.text, true);
+	return parser.result();
+}
+
+async function streamWithNode(
+	url: string,
+	headers: Record<string, string>,
+	payload: string,
+	parser: EventParser,
+	signal: AbortSignal,
+): Promise<void> {
+	if (!Platform.isDesktop) throw new Error("Streaming needs the desktop app.");
+	const { request } = await import("https");
+	const asError = (error: unknown) => (error instanceof Error ? error : new Error(String(error)));
+	await new Promise<void>((resolve, reject) => {
+		const req = request(url, { method: "POST", headers: { ...headers, "Content-Length": new TextEncoder().encode(payload).length } }, (res) => {
+			res.setEncoding("utf8");
+			const status = res.statusCode ?? 0;
+			if (status >= 400) {
+				let text = "";
+				res.on("data", (chunk: string) => (text += chunk));
+				res.on("end", () => reject(apiError(parseJson(text), status)));
+				return;
+			}
+			res.on("data", (chunk: string) => {
+				try {
+					parser.consume(chunk);
+				} catch (error) {
+					req.destroy(asError(error));
+				}
+			});
+			res.on("end", () => {
+				try {
+					parser.consume("", true);
+					resolve();
+				} catch (error) {
+					reject(asError(error));
+				}
+			});
+			res.on("error", (error) => reject(asError(error)));
+		});
+		const abort = () => req.destroy(new DOMException("Stopped.", "AbortError"));
+		signal.addEventListener("abort", abort, { once: true });
+		req.on("error", (error) => reject(asError(error)));
+		req.on("close", () => signal.removeEventListener("abort", abort));
+		req.end(payload);
 	});
-	if (!response.ok) throw apiError(parseJson(await response.text()), response.status);
+}
 
-	const items: JsonRecord[] = [];
-	let final: JsonRecord | undefined;
-	let incompleteReason: string | undefined;
+/** Parses Responses API server-sent events, from chunks or a whole body. */
+class EventParser {
+	private buffer = "";
+	private items: JsonRecord[] = [];
+	private final: JsonRecord | undefined;
+	private incompleteReason: string | undefined;
 
-	const handle = (event: JsonRecord) => {
-		switch (event.type) {
-			case "response.output_text.delta":
-				if (typeof event.delta === "string") onTextDelta(event.delta);
-				break;
-			case "response.output_item.done": {
-				const item = asRecord(event.item);
-				if (item) items[typeof event.output_index === "number" ? event.output_index : items.length] = item;
-				break;
-			}
-			case "response.completed":
-				final = asRecord(event.response) ?? {};
-				break;
-			case "response.incomplete": {
-				final = asRecord(event.response) ?? {};
-				incompleteReason = asString(asRecord(final.incomplete_details)?.reason) ?? "unknown";
-				break;
-			}
-			case "response.failed":
-				throw apiError(asRecord(event.response)?.error ?? event, 200);
-			case "error":
-				throw apiError(event, 200);
-		}
-	};
+	constructor(private onTextDelta: (delta: string) => void) {}
 
-	let buffer = "";
-	const consume = (chunk: string, flush = false) => {
-		buffer += chunk;
-		const blocks = buffer.split(/\r?\n\r?\n/);
-		buffer = flush ? "" : blocks.pop() ?? "";
+	/** Feeds raw server-sent event text. */
+	consume(chunk: string, flush = false): void {
+		this.buffer += chunk;
+		const blocks = this.buffer.split(/\r?\n\r?\n/);
+		this.buffer = flush ? "" : blocks.pop() ?? "";
 		for (const block of blocks) {
 			const data = block
 				.split(/\r?\n/)
@@ -105,24 +149,38 @@ export async function streamResponse(
 				.join("\n");
 			if (!data || data === "[DONE]") continue;
 			const event = asRecord(parseJson(data));
-			if (event) handle(event);
+			if (event) this.handle(event);
 		}
-	};
-
-	if (response.body) {
-		const reader = response.body.getReader();
-		const decoder = new TextDecoder();
-		for (;;) {
-			const { done, value } = await reader.read();
-			if (done) break;
-			consume(decoder.decode(value, { stream: true }));
-		}
-		consume(decoder.decode(), true);
-	} else {
-		consume(await response.text(), true);
 	}
 
-	if (!final) throw new ApiError(0, "stream_interrupted", "The response stream ended early. Please try again.");
-	const finalOutput = Array.isArray(final.output) ? final.output.map(asRecord).filter((i): i is JsonRecord => !!i) : [];
-	return { output: finalOutput.length ? finalOutput : items.filter(Boolean), incompleteReason };
+	handle(event: JsonRecord): void {
+		switch (event.type) {
+			case "response.output_text.delta":
+				if (typeof event.delta === "string") this.onTextDelta(event.delta);
+				break;
+			case "response.output_item.done": {
+				const item = asRecord(event.item);
+				if (item) this.items[typeof event.output_index === "number" ? event.output_index : this.items.length] = item;
+				break;
+			}
+			case "response.completed":
+				this.final = asRecord(event.response) ?? {};
+				break;
+			case "response.incomplete":
+				this.final = asRecord(event.response) ?? {};
+				this.incompleteReason = asString(asRecord(this.final.incomplete_details)?.reason) ?? "unknown";
+				break;
+			case "response.failed":
+				throw apiError(asRecord(event.response)?.error ?? event, 200);
+			case "error":
+				throw apiError(event, typeof event.status === "number" ? event.status : 200);
+		}
+	}
+
+	result(): TurnResult {
+		const final = this.final;
+		if (!final) throw new ApiError(0, "stream_interrupted", "The response stream ended early. Please try again.");
+		const output = Array.isArray(final.output) ? final.output.map(asRecord).filter((i): i is JsonRecord => !!i) : [];
+		return { output: output.length ? output : this.items.filter(Boolean), incompleteReason: this.incompleteReason };
+	}
 }

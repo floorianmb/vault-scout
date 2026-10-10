@@ -1,8 +1,9 @@
-import { ButtonComponent, Component, DropdownComponent, ItemView, Keymap, MarkdownRenderer, Platform, setIcon, WorkspaceLeaf } from "obsidian";
+import { ButtonComponent, Component, DropdownComponent, ItemView, Keymap, MarkdownRenderer, Notice, Platform, setIcon, TFile, WorkspaceLeaf } from "obsidian";
 import { Agent } from "./agent";
 import { AuthError } from "./auth";
+import { Chat, ChatPickerModal, ChatTurn } from "./chats";
 import type VaultScoutPlugin from "./main";
-import { ApiError } from "./openai";
+import { ApiError, streamingUnavailableReason } from "./openai";
 import { SignInModal } from "./sign-in-modal";
 import { ToolCall } from "./tools";
 
@@ -34,6 +35,18 @@ function toolLabel(call: ToolCall): string {
 			return `Listing ${arg("path") || "vault root"}`;
 		case "get_links":
 			return `Following links of ${arg("path")}`;
+		case "create_note":
+			return `Creating ${arg("path")}`;
+		case "edit_note":
+			return `Editing ${arg("path")}`;
+		case "append_to_note":
+			return `Appending to ${arg("path")}`;
+		case "check_prism":
+			return `Checking Prism blocks in ${arg("path")}`;
+		case "load_skill":
+			return `Loading skill ${arg("name")}`;
+		case "read_skill_file":
+			return `Reading ${arg("file")} of skill ${arg("name")}`;
 		default:
 			return call.name;
 	}
@@ -41,17 +54,22 @@ function toolLabel(call: ToolCall): string {
 
 export class ChatView extends ItemView {
 	private agent: Agent;
+	private chat: Chat;
+	private titleEl!: HTMLElement;
 	private messagesEl!: HTMLElement;
 	private inputEl!: HTMLTextAreaElement;
 	private sendButton!: ButtonComponent;
 	private modelDropdown!: DropdownComponent;
 	private accountEl!: HTMLElement;
+	private noteButton!: HTMLElement;
 	private messageComponents: Component[] = [];
 	private abort: AbortController | undefined;
+	private streamingNoteShown = false;
 
 	constructor(leaf: WorkspaceLeaf, private plugin: VaultScoutPlugin) {
 		super(leaf);
 		this.agent = new Agent(plugin.auth, plugin.tools);
+		this.chat = plugin.chats.newChat(plugin.settings.model);
 	}
 
 	getViewType(): string {
@@ -77,10 +95,13 @@ export class ChatView extends ItemView {
 			await this.plugin.saveSettings();
 		});
 		this.modelDropdown.selectEl.addClass("vault-scout-model");
-		const newChat = header.createEl("button", { cls: "clickable-icon", attr: { "aria-label": "New chat" } });
-		setIcon(newChat, "square-pen");
-		this.registerDomEvent(newChat, "click", () => this.newChat());
+		this.iconButton(header, "history", "Chats", () => this.pickChat());
+		this.noteButton = this.iconButton(header, "file-text", "Open chat as note", () => {
+			if (this.chat.file) void this.app.workspace.getLeaf("tab").openFile(this.chat.file);
+		});
+		this.iconButton(header, "square-pen", "New chat", () => this.newChat());
 
+		this.titleEl = root.createDiv({ cls: "vault-scout-title" });
 		this.accountEl = root.createDiv({ cls: "vault-scout-account" });
 		this.messagesEl = root.createDiv({ cls: "vault-scout-messages" });
 		this.registerDomEvent(this.messagesEl, "click", (evt) => this.openLink(evt));
@@ -97,11 +118,47 @@ export class ChatView extends ItemView {
 		this.sendButton.onClick(() => (this.abort ? this.abort.abort() : void this.submit()));
 
 		this.register(this.plugin.auth.onChange(() => void this.refreshAccount()));
+		this.updateHeader();
 		await this.refreshAccount();
 	}
 
 	override async onClose(): Promise<void> {
 		this.abort?.abort();
+	}
+
+	pickChat(): void {
+		new ChatPickerModal(this.app, this.plugin.chats, (file) => void this.openChat(file)).open();
+	}
+
+	async openChat(file: TFile): Promise<void> {
+		this.abort?.abort();
+		this.chat = await this.plugin.chats.load(file);
+		await this.agent.load(this.chat.turns, this.chat.skills);
+		this.clearMessages();
+		for (const turn of this.chat.turns) {
+			this.messagesEl.createDiv({ cls: "vault-scout-message is-user", text: turn.user });
+			if (turn.steps.length) {
+				const steps = new StepList(this.messagesEl);
+				for (const step of turn.steps) steps.add(step);
+				steps.finish();
+			}
+			if (turn.answer) await this.renderMarkdown(this.messagesEl.createDiv({ cls: "vault-scout-message is-assistant" }), turn.answer);
+		}
+		this.updateHeader();
+		this.messagesEl.scrollTo({ top: this.messagesEl.scrollHeight });
+	}
+
+	private iconButton(parent: HTMLElement, icon: string, label: string, onClick: () => void): HTMLElement {
+		const button = parent.createEl("button", { cls: "clickable-icon", attr: { "aria-label": label } });
+		setIcon(button, icon);
+		this.registerDomEvent(button, "click", onClick);
+		return button;
+	}
+
+	private updateHeader() {
+		this.titleEl.setText(this.chat.title);
+		this.titleEl.toggleClass("is-hidden", !this.chat.title);
+		this.noteButton.toggleClass("is-hidden", !this.chat.file);
 	}
 
 	private async refreshAccount() {
@@ -135,6 +192,12 @@ export class ChatView extends ItemView {
 	private newChat() {
 		this.abort?.abort();
 		this.agent.reset();
+		this.chat = this.plugin.chats.newChat(this.plugin.settings.model);
+		this.clearMessages();
+		this.updateHeader();
+	}
+
+	private clearMessages() {
 		for (const component of this.messageComponents) this.removeChild(component);
 		this.messageComponents = [];
 		this.messagesEl.empty();
@@ -150,11 +213,24 @@ export class ChatView extends ItemView {
 		this.inputEl.value = "";
 		this.messagesEl.createDiv({ cls: "vault-scout-message is-user", text });
 
+		const chat = this.chat;
+		const turn: ChatTurn = { user: text, steps: [], answer: "" };
+		chat.turns.push(turn);
+		chat.model = this.plugin.settings.model;
+
 		const abort = (this.abort = new AbortController());
 		this.sendButton.setIcon("square").setTooltip("Stop");
 		let bubble = this.messagesEl.createDiv({ cls: "vault-scout-message is-assistant is-streaming" });
+		const steps = new StepList(this.messagesEl, bubble);
 		let streamed = "";
 		const scroll = () => this.messagesEl.scrollTo({ top: this.messagesEl.scrollHeight });
+		const keepRound = () => {
+			if (!streamed) return;
+			turn.answer = turn.answer ? `${turn.answer}\n\n${streamed}` : streamed;
+			void this.renderMarkdown(bubble, streamed);
+			streamed = "";
+			bubble = this.messagesEl.createDiv({ cls: "vault-scout-message is-assistant is-streaming" });
+		};
 
 		try {
 			const incomplete = await this.agent.send(text, this.plugin.settings.model, this.plugin.settings.extraInstructions, {
@@ -164,26 +240,42 @@ export class ChatView extends ItemView {
 					scroll();
 				},
 				onTool: (call) => {
-					this.messagesEl.insertBefore(createDiv({ cls: "vault-scout-tool", text: toolLabel(call) }), bubble);
+					const label = toolLabel(call);
+					turn.steps.push(label);
+					steps.add(label);
 					scroll();
 				},
-				onRoundEnd: () => {
-					if (!streamed) return;
-					void this.renderMarkdown(bubble, streamed);
-					streamed = "";
-					bubble = this.messagesEl.createDiv({ cls: "vault-scout-message is-assistant is-streaming" });
-				},
+				onRoundEnd: keepRound,
 			}, abort.signal);
+			this.noteStreaming();
 			if (incomplete) this.messagesEl.createDiv({ cls: "vault-scout-error", text: `The answer is incomplete (${incomplete}).` });
 		} catch (error) {
-			if (streamed) void this.renderMarkdown(bubble, streamed);
+			this.noteStreaming();
+			keepRound();
 			this.messagesEl.createDiv({ cls: "vault-scout-error", text: describe(error) });
 		} finally {
+			steps.finish();
 			if (!bubble.hasChildNodes()) bubble.remove();
-			this.abort = undefined;
-			this.sendButton.setIcon("send").setTooltip("Send");
+			if (this.abort === abort) {
+				this.abort = undefined;
+				this.sendButton.setIcon("send").setTooltip("Send");
+			}
 			scroll();
 		}
+		try {
+			chat.skills = this.agent.loadedSkills();
+			await this.plugin.chats.save(chat);
+			if (chat === this.chat) this.updateHeader();
+		} catch (error) {
+			new Notice(`The chat could not be saved: ${describe(error)}`);
+		}
+	}
+
+	private noteStreaming() {
+		const reason = streamingUnavailableReason();
+		if (!reason || this.streamingNoteShown) return;
+		this.streamingNoteShown = true;
+		this.messagesEl.createDiv({ cls: "vault-scout-tool", text: `Answers arrive at once here, because ${reason}.` });
 	}
 
 	private async renderMarkdown(el: HTMLElement, markdown: string) {
@@ -209,5 +301,31 @@ export class ChatView extends ItemView {
 			// Keep as is.
 		}
 		void this.app.workspace.openLinkText(path, "", Keymap.isModEvent(evt));
+	}
+}
+
+/** A turn's research steps as one collapsible line: the latest step while working, the count when done. */
+class StepList {
+	private details: HTMLDetailsElement | undefined;
+	private summary!: HTMLElement;
+	private list!: HTMLElement;
+	private count = 0;
+
+	constructor(private parent: HTMLElement, private before?: HTMLElement) {}
+
+	add(label: string) {
+		if (!this.details) {
+			this.details = this.parent.createEl("details", { cls: "vault-scout-steps" });
+			if (this.before) this.parent.insertBefore(this.details, this.before);
+			this.summary = this.details.createEl("summary");
+			this.list = this.details.createDiv();
+		}
+		this.count++;
+		this.list.createDiv({ cls: "vault-scout-tool", text: label });
+		this.summary.setText(`${label} (${this.count})`);
+	}
+
+	finish() {
+		if (this.details) this.summary.setText(`${this.count} research step${this.count === 1 ? "" : "s"}`);
 	}
 }

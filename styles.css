@@ -27,8 +27,16 @@
 	color: var(--text-muted);
 }
 
-.vault-scout-account.is-hidden {
+.vault-scout .is-hidden {
 	display: none;
+}
+
+.vault-scout-title {
+	font-size: var(--font-ui-small);
+	color: var(--text-muted);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 .vault-scout-messages {
@@ -63,6 +71,23 @@
 
 .vault-scout-message.is-streaming {
 	white-space: pre-wrap;
+}
+
+.vault-scout-steps {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+	padding: 0 var(--size-4-3);
+}
+
+.vault-scout-steps summary {
+	cursor: pointer;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.vault-scout-steps .vault-scout-tool {
+	padding: 0 var(--size-4-3);
 }
 
 .vault-scout-tool {
@@ -110,4 +135,34 @@
 	justify-content: flex-end;
 	gap: var(--size-4-2);
 	margin-top: var(--size-4-2);
+}
+
+.vault-scout-change-path {
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	margin-bottom: var(--size-4-2);
+	overflow-wrap: anywhere;
+}
+
+.vault-scout-diff {
+	max-height: 50vh;
+	overflow: auto;
+	padding: var(--size-4-2);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-smaller);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+.vault-scout-diff-line.is-add {
+	background: rgba(var(--color-green-rgb), 0.15);
+}
+
+.vault-scout-diff-line.is-del {
+	background: rgba(var(--color-red-rgb), 0.15);
+	text-decoration: line-through;
+	color: var(--text-muted);
 }

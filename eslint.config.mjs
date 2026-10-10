@@ -13,7 +13,7 @@ export default defineConfig([
 			},
 		},
 		rules: {
-			"obsidianmd/ui/sentence-case": ["warn", { brands: ["ChatGPT", "Vault Scout", "OpenAI"] }],
+			"obsidianmd/ui/sentence-case": ["warn", { brands: ["ChatGPT", "Vault Scout", "OpenAI", "Claude Code", "Codex", "Prism", "Markdown"] }],
 		},
 	},
 ]);
