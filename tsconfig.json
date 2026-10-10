@@ -1,0 +1,17 @@
+{
+	"compilerOptions": {
+		"baseUrl": ".",
+		"module": "ESNext",
+		"target": "ES2021",
+		"moduleResolution": "bundler",
+		"lib": ["DOM", "DOM.Iterable", "ES2021"],
+		"strict": true,
+		"noImplicitOverride": true,
+		"noUncheckedIndexedAccess": true,
+		"isolatedModules": true,
+		"importHelpers": true,
+		"skipLibCheck": true,
+		"types": []
+	},
+	"include": ["src/**/*.ts"]
+}

@@ -1,0 +1,9 @@
+{
+	"id": "vault-scout",
+	"name": "Vault Scout",
+	"version": "0.1.0",
+	"minAppVersion": "1.13.0",
+	"description": "Research your vault with ChatGPT on desktop and mobile, billed to your own ChatGPT plan.",
+	"author": "floorianmb",
+	"isDesktopOnly": false
+}

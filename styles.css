@@ -1,0 +1,113 @@
+.vault-scout {
+	height: 100%;
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-4-2);
+	padding: var(--size-4-2);
+}
+
+.vault-scout-header {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-2);
+}
+
+.vault-scout-model {
+	flex: 1;
+	min-width: 0;
+}
+
+.vault-scout-account {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-4-2);
+	padding: var(--size-4-3);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-m);
+	color: var(--text-muted);
+}
+
+.vault-scout-account.is-hidden {
+	display: none;
+}
+
+.vault-scout-messages {
+	flex: 1;
+	overflow-y: auto;
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-4-2);
+	user-select: text;
+}
+
+.vault-scout-message {
+	padding: var(--size-4-2) var(--size-4-3);
+	border-radius: var(--radius-m);
+	overflow-wrap: anywhere;
+}
+
+.vault-scout-message.is-user {
+	align-self: flex-end;
+	max-width: 85%;
+	background: var(--background-modifier-hover);
+	white-space: pre-wrap;
+}
+
+.vault-scout-message.is-assistant > :first-child {
+	margin-top: 0;
+}
+
+.vault-scout-message.is-assistant > :last-child {
+	margin-bottom: 0;
+}
+
+.vault-scout-message.is-streaming {
+	white-space: pre-wrap;
+}
+
+.vault-scout-tool {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+	padding: 0 var(--size-4-3);
+}
+
+.vault-scout-error {
+	color: var(--text-error);
+	font-size: var(--font-ui-small);
+	padding: 0 var(--size-4-3);
+}
+
+.vault-scout-composer {
+	display: flex;
+	align-items: flex-end;
+	gap: var(--size-4-2);
+}
+
+.vault-scout-composer textarea {
+	flex: 1;
+	resize: vertical;
+	min-height: 3em;
+}
+
+.vault-scout-sign-in ol {
+	padding-inline-start: 1.4em;
+}
+
+.vault-scout-sign-in li {
+	margin-bottom: var(--size-4-1);
+}
+
+.vault-scout-callback-input {
+	width: 100%;
+	min-height: 5em;
+	margin-top: var(--size-4-3);
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-smaller);
+}
+
+.vault-scout-modal-buttons {
+	display: flex;
+	justify-content: flex-end;
+	gap: var(--size-4-2);
+	margin-top: var(--size-4-2);
+}
