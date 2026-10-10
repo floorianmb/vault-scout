@@ -9,7 +9,7 @@ const MAX_ROUNDS = 16;
 const KEEP_TOOL_RESULTS = 8;
 const OLD_RESULT_LIMIT = 1500;
 /** Tools without side effects; several of them in one round run in parallel. */
-const READ_ONLY = new Set(["search_notes", "read_note", "list_folder", "get_links", "read_skill_file", "load_skill"]);
+const READ_ONLY = new Set(["search_notes", "read_note", "list_folder", "get_links", "get_properties", "read_skill_file", "load_skill"]);
 
 const INSTRUCTIONS = `You are Vault Scout, a research assistant inside the user's Obsidian vault.
 - Before answering questions about the user's knowledge, search and read the relevant notes with your tools. Do several searches with different keywords and synonyms, also in the other languages the notes are written in, when the first one finds little.
@@ -17,8 +17,24 @@ const INSTRUCTIONS = `You are Vault Scout, a research assistant inside the user'
 - Call independent read tools together in one turn; they run in parallel. Do not re-read a note you already read in this chat unless it changed.
 - Cite every note you rely on as a Markdown link with its vault path, URL-encoding spaces, e.g. [Title](Folder/My%20Note.md).
 - Clearly separate what the notes say from your own general knowledge. If the notes do not cover something, say so.
-- You can create and change notes. Every change is shown to the user for approval. Prefer small edit_note changes over rewriting, and never change existing text of the user unless asked. If the user rejects a change, do not retry it unchanged.
+- You can create, change and rename notes. Every change is shown to the user for approval. Prefer small edit_note changes over rewriting and set_properties for frontmatter, and never change existing text of the user unless asked. If the user rejects a change, do not retry it unchanged.
+- When something is ambiguous and matters (which note, which option), ask with ask_user instead of guessing.
 - Answer in the user's language, concisely, in Markdown.`;
+
+/** Text the user selected in a note, sent along as the scope of the question. */
+export interface Selection {
+	path: string;
+	text: string;
+	fromLine: number;
+	toLine: number;
+}
+
+export interface UserMessage {
+	text: string;
+	/** Images as data URLs. */
+	images: string[];
+	selection?: Selection;
+}
 
 export interface AgentEvents {
 	onText(delta: string): void;
@@ -57,8 +73,8 @@ export class Agent {
 		for (const name of skills) await this.loadSkill(name);
 	}
 
-	async send(text: string, model: string, extraInstructions: string, events: AgentEvents, signal: AbortSignal): Promise<string | undefined> {
-		this.history.push({ role: "user", content: text });
+	async send(message: UserMessage, model: string, extraInstructions: string, events: AgentEvents, signal: AbortSignal): Promise<string | undefined> {
+		this.history.push({ role: "user", content: userContent(message) });
 		const overview = await this.tools.overview();
 		const instructions = () =>
 			[
@@ -117,6 +133,18 @@ export class Agent {
 	}
 
 	private compact() {
+		// Images are sent with their own question only; earlier ones become a short note.
+		const users = this.history.filter((item) => item.role === "user");
+		for (const item of users.slice(0, -1)) {
+			if (!Array.isArray(item.content)) continue;
+			const parts = item.content as JsonRecord[];
+			if (!parts.some((part) => part.type === "input_image")) continue;
+			const count = parts.filter((part) => part.type === "input_image").length;
+			item.content = [
+				...parts.filter((part) => part.type !== "input_image"),
+				{ type: "input_text", text: `[${count} image${count === 1 ? "" : "s"} attached earlier, not sent again]` },
+			];
+		}
 		const results = this.history.filter((item) => item.type === "function_call_output");
 		for (const item of results.slice(0, -KEEP_TOOL_RESULTS)) {
 			if (typeof item.output === "string" && item.output.length > OLD_RESULT_LIMIT) {
@@ -167,4 +195,17 @@ async function sequential<T>(tasks: (() => Promise<T>)[]): Promise<T[]> {
 	const results: T[] = [];
 	for (const task of tasks) results.push(await task());
 	return results;
+}
+
+/** The user's text, the selected passage as scope, and attached images as Responses input parts. */
+function userContent(message: UserMessage): string | JsonRecord[] {
+	let text = message.text;
+	const selection = message.selection;
+	if (selection) {
+		const lines = selection.fromLine === selection.toLine ? `line ${selection.fromLine}` : `lines ${selection.fromLine}-${selection.toLine}`;
+		text += `\n\nSelected passage from ${selection.path} (${lines}):\n<selection>\n${selection.text}\n</selection>\n` +
+			"The question is about this passage. Unless the user asks for more, limit any change to it, using edit_note with this exact text.";
+	}
+	if (!message.images.length) return text;
+	return [{ type: "input_text", text }, ...message.images.map((url) => ({ type: "input_image", image_url: url }))];
 }

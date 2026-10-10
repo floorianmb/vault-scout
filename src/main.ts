@@ -1,4 +1,4 @@
-import { Platform, Plugin } from "obsidian";
+import { Editor, MarkdownFileInfo, Platform, Plugin } from "obsidian";
 import { ChatGPTAuth } from "./auth";
 import { ChatStore } from "./chats";
 import { InstallSkillsModal } from "./install-skills-modal";
@@ -51,11 +51,36 @@ export default class VaultScoutPlugin extends Plugin {
 			callback: async () => (await this.openChat())?.pickChat(),
 		});
 		this.addCommand({
+			id: "ask-about-selection",
+			name: "Ask about the selection",
+			editorCheckCallback: (checking, editor, info) => {
+				if (!editor.somethingSelected() || !info.file) return false;
+				if (!checking) void this.askAboutSelection(editor, info);
+				return true;
+			},
+		});
+		this.registerEvent(
+			this.app.workspace.on("editor-menu", (menu, editor, info) => {
+				if (!editor.somethingSelected() || !info.file) return;
+				menu.addItem((item) =>
+					item.setTitle("Ask Vault Scout about selection").setIcon("telescope").onClick(() => void this.askAboutSelection(editor, info)),
+				);
+			}),
+		);
+		this.addCommand({
 			id: "install-skills",
 			name: "Install skills",
 			callback: () => new InstallSkillsModal(this.app, this.skills).open(),
 		});
 		this.addSettingTab(new VaultScoutSettingTab(this.app, this));
+	}
+
+	/** Opens the chat with the editor's selection as the scope of the next question. Idea from Chatting with AI. */
+	private async askAboutSelection(editor: Editor, info: MarkdownFileInfo) {
+		const from = editor.getCursor("from").line + 1;
+		const to = editor.getCursor("to").line + 1;
+		const selection = { path: info.file?.path ?? "", text: editor.getSelection(), fromLine: from, toLine: to };
+		(await this.openChat())?.setSelection(selection);
 	}
 
 	async loadModels(): Promise<ModelInfo[]> {

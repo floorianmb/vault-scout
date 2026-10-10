@@ -1,4 +1,5 @@
-import { App, getAllTags, MarkdownView, normalizePath, prepareSimpleSearch, SearchResult, TFile, TFolder } from "obsidian";
+import { App, getAllTags, MarkdownView, normalizePath, prepareSimpleSearch, SearchResult, stringifyYaml, TFile, TFolder } from "obsidian";
+import { askUser } from "./ask-modal";
 import { confirmChange } from "./changes";
 import { asRecord, asString, JsonRecord, parseJson } from "./json";
 import type { VaultScoutSettings } from "./settings";
@@ -107,6 +108,54 @@ export class VaultTools {
 			},
 			{
 				type: "function",
+				name: "get_properties",
+				description: "Read a note's frontmatter properties as JSON.",
+				parameters: { type: "object", properties: { path: pathParam("Vault path of the note.") }, required: ["path"] },
+			},
+			{
+				type: "function",
+				name: "set_properties",
+				description:
+					"Set or remove frontmatter properties of a note without touching its text. Values may be strings, numbers, booleans, lists or objects; " +
+					"null removes a property. Other properties are kept. The user reviews and approves the change.",
+				parameters: {
+					type: "object",
+					properties: {
+						path: pathParam("Vault path of the note."),
+						properties: { type: "object", description: "Properties to set; a null value removes that property.", additionalProperties: true },
+					},
+					required: ["path", "properties"],
+				},
+			},
+			{
+				type: "function",
+				name: "rename_file",
+				description:
+					"Rename a note or file, or move it to another folder. Links to it are updated by Obsidian. Keeps the file extension. " +
+					"The user reviews and approves it.",
+				parameters: {
+					type: "object",
+					properties: { path: pathParam("Current vault path."), new_path: pathParam("New vault path, with the same extension.") },
+					required: ["path", "new_path"],
+				},
+			},
+			{
+				type: "function",
+				name: "ask_user",
+				description:
+					"Ask the user a question and wait for the answer, when you cannot decide something yourself (for example which note is meant). " +
+					"Prefer this over guessing before you write.",
+				parameters: {
+					type: "object",
+					properties: {
+						question: { type: "string", description: "The question." },
+						options: { type: "array", items: { type: "string" }, description: "Optional suggested answers, shown as buttons." },
+					},
+					required: ["question"],
+				},
+			},
+			{
+				type: "function",
 				name: "check_prism",
 				description:
 					"Check the Prism viz blocks of a note: opens the note so Prism renders it, then returns each block's status and errors " +
@@ -208,6 +257,20 @@ export class VaultTools {
 				return this.append(args);
 			case "check_prism":
 				return this.checkPrism(args);
+			case "get_properties": {
+				const file = this.resolve(asString(args.path) ?? "");
+				if (!file) return { error: "Note not found." };
+				return { path: file.path, properties: this.app.metadataCache.getFileCache(file)?.frontmatter ?? {} };
+			}
+			case "set_properties":
+				return this.setProperties(args);
+			case "rename_file":
+				return this.rename(args);
+			case "ask_user": {
+				const options = Array.isArray(args.options) ? args.options.filter((o): o is string => typeof o === "string").slice(0, 6) : [];
+				const answer = await askUser(this.app, asString(args.question) ?? "", options);
+				return answer === null ? { answer: null, note: "The user closed the question without answering." } : { answer };
+			}
 			case "load_skill":
 				return (await this.skills.load(asString(args.name) ?? "")) ?? { error: "Unknown skill." };
 			case "read_skill_file": {
@@ -362,6 +425,43 @@ export class VaultTools {
 		if (!(await this.approve({ action: "append", path: file.path, after: text }))) return declined;
 		await this.app.vault.process(file, (current) => `${current}${current.endsWith("\n") || !current ? "" : "\n"}${text}`);
 		return { appended: file.path };
+	}
+
+	private async setProperties(args: JsonRecord) {
+		const file = this.existingNote(asString(args.path) ?? "");
+		const changes = asRecord(args.properties);
+		if (!changes || !Object.keys(changes).length) return { error: "properties must be an object with at least one key." };
+		const current = { ...(this.app.metadataCache.getFileCache(file)?.frontmatter ?? {}) };
+		const next = { ...current };
+		for (const [key, value] of Object.entries(changes)) {
+			if (value === null) delete next[key];
+			else next[key] = value;
+		}
+		const yaml = (data: JsonRecord) => (Object.keys(data).length ? stringifyYaml(data).trimEnd() : "");
+		if (!(await this.approve({ action: "properties", path: file.path, before: yaml(current), after: yaml(next) }))) return declined;
+		await this.app.fileManager.processFrontMatter(file, (frontmatter: JsonRecord) => {
+			for (const [key, value] of Object.entries(changes)) {
+				if (value === null) delete frontmatter[key];
+				else frontmatter[key] = value;
+			}
+		});
+		return { updated: file.path, properties: Object.keys(changes) };
+	}
+
+	private async rename(args: JsonRecord) {
+		const file = this.resolve(asString(args.path) ?? "");
+		if (!file) return { error: "File not found." };
+		const target = normalizePath((asString(args.new_path) ?? "").trim().replace(/^\/+/, ""));
+		if (!target || target === file.path) return { error: "new_path must be a different vault path." };
+		const hidden = (path: string) => path.split("/").some((part) => part.startsWith(".")) || path.startsWith(`${this.app.vault.configDir}/`);
+		if (hidden(file.path) || hidden(target)) return { error: "Hidden and configuration paths cannot be renamed." };
+		if (!target.endsWith(`.${file.extension}`)) return { error: `new_path must keep the extension .${file.extension}.` };
+		if (this.app.vault.getAbstractFileByPath(target)) return { error: "Something already exists at new_path." };
+		if (!(await this.approve({ action: "rename", path: file.path, before: file.path, after: target }))) return declined;
+		await ensureFolder(this.app, target.slice(0, Math.max(target.lastIndexOf("/"), 0)));
+		const from = file.path;
+		await this.app.fileManager.renameFile(file, target);
+		return { renamed: from, to: target, note: "Links to it were updated." };
 	}
 
 	private async checkPrism(args: JsonRecord) {

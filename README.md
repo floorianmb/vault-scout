@@ -47,7 +47,8 @@ It runs entirely inside the Obsidian app. There is no server in between and no A
 - **📱 Phone first.** It was built and tested in the Obsidian iOS app: a full-screen chat tab, a keyboard that gets out of your way, and a layout that leaves room for Obsidian's navigation bar.
 - **💳 Your plan, not your credit card.** No API billing and no keys to paste. You set a weekly limit for Vault Scout in your ChatGPT settings, and that is it.
 - **🔎 Answers from your notes.** The agent sees your folder structure and root index up front, tries several keywords and the languages your notes are written in, reads what it needs (several notes at once) and links every note it relies on.
-- **✍️ Writes only with your OK.** New notes, edits and appended text are shown as a diff first. Nothing is written until you tap *Apply*.
+- **✍️ Writes only with your OK.** New notes, edits, properties and renames are shown as a diff first. Nothing is written until you tap *Apply*.
+- **📸 Show it, select it.** Attach photos or screenshots from your camera roll, or select a passage in a note and ask about just that.
 - **🧩 Skills like on desktop agents.** Install the [Prism](https://github.com/floorianmb/prism-viz) skill with one tap, and the agent builds interactive charts, diagrams and dashboards in your notes and checks that they render.
 - **🗂️ Chats are notes.** Every conversation is saved as a Markdown note, syncs with your vault, and can be picked up again on any device.
 
@@ -102,7 +103,12 @@ Why the copy-and-paste step? Sign in with ChatGPT sends the browser back to a sm
 | **Search** | Full-text search over your notes, with folder and tag filters. Results include frontmatter title, description and type plus matching snippets. If no note contains every word, it falls back to the best partial matches. |
 | **Read and follow** | Reads notes (long ones in chunks), lists folders, and follows outgoing links and backlinks. Several reads run in parallel. |
 | **Cite** | Every note it relies on is linked in the answer. Tap a link to open the note. |
-| **Write, with approval** | `create_note`, `edit_note` (replaces one exact passage) and `append_to_note`. You see a diff and tap *Apply* or *Reject*. Hidden folders and the Obsidian configuration are off limits, and nothing is ever deleted. |
+| **Write, with approval** | `create_note`, `edit_note` (replaces one exact passage) and `append_to_note`. You see a diff and tap *Apply* or *Reject*. Hidden folders and the Obsidian configuration are off limits. |
+| **Properties** | `get_properties` and `set_properties` read and change frontmatter through Obsidian's own frontmatter API, without touching the note's text. `null` removes a property. You approve the before and after. |
+| **Rename and move** | `rename_file` renames a note or moves it to another folder, after you approve it. Obsidian updates every link to it. The file extension stays the same. Nothing is ever deleted. |
+| **Ask you** | When something is unclear, for example which of two notes you mean, the agent asks with `ask_user`, with suggested answers as buttons, instead of guessing. |
+| **Selection** | Select text in a note and run *Ask about the selection* (command palette or the editor menu). The question is scoped to that passage, and edits stay inside it unless you ask for more. |
+| **Images** | Tap the image button next to the input to attach up to four photos or screenshots. They are scaled down on the device before they are sent. |
 | **Check Prism blocks** | After writing a ` ```viz ` block, it opens the note so [Prism](https://github.com/floorianmb/prism-viz) renders it, reads Prism's error log and fixes what broke. |
 | **Remember** | Chats are notes in `Vault Scout/Chats/`. Open an earlier one from the history button and continue where you left off, also on another device. |
 | **Pick the model** | The model menu lists the models your ChatGPT account can use. |
@@ -123,8 +129,9 @@ On a Mac you can also import the skills you already use with Claude Code and Cod
 
 ## Privacy and network use
 
-- **What goes to OpenAI:** your messages and the content of the notes the agent reads or writes, sent to `api.openai.com` under your ChatGPT account. OpenAI's terms for Sign in with ChatGPT apply. Requests are made with `store: false`.
-- **Your sign-in stays on the device.** Tokens are kept in the app's local storage for this vault. They are never written to the vault or plugin settings, so they never sync. Each device signs in separately. *Sign out* revokes the session.
+- **What goes to OpenAI:** your messages, attached images, and the content of the notes the agent reads or writes, sent to `api.openai.com` under your ChatGPT account. OpenAI's terms for Sign in with ChatGPT apply. Requests are made with `store: false`.
+- **Your sign-in stays on the device.** Tokens are kept in Obsidian's secret storage on the device (*Settings → Keychain*). They are never written to the vault or plugin settings, so they never sync. Each device signs in separately. *Sign out* revokes the session.
+- **Images are not saved.** A chat note records that an image was attached, not the image itself.
 - **Nothing else is contacted**, except GitHub (`api.github.com`, `raw.githubusercontent.com`) when you install or update a skill. There is no analytics or telemetry, and no server of ours.
 - **Your vault is the only storage.** Chats are notes and skills are files, all in your vault and under your control. Settings (model, folders, skill switches) are in the plugin's `data.json`.
 
@@ -140,7 +147,7 @@ On a Mac you can also import the skills you already use with Claude Code and Cod
 No. Requests use the allowance of your ChatGPT Plus or Pro plan. There is no API key and no API billing.
 
 **Can it change or delete my notes behind my back?**
-No. Every change is shown for approval first (*Settings → Confirm changes*), and there is no tool for deleting or moving notes.
+No. Every change, including a rename or move, is shown for approval first (*Settings → Confirm changes*). There is no tool for deleting notes.
 
 **Why do I sign in again on my iPad?**
 Sign-ins are per device on purpose. OpenAI replaces the refresh token on every refresh, so a synced session would keep logging your devices out of each other.
@@ -165,6 +172,12 @@ npm run deploy -- <vault>  # copy the build into <vault>/.obsidian/plugins/vault
 ```
 
 `skills/` contains the skills offered under *Install skills*, installed from this repository.
+
+## Acknowledgements
+
+Several features are ideas from **[Chatting with AI](https://github.com/o1xhack/obsidian-chatting)** by [o1xhack](https://github.com/o1xhack), itself based on [obsidian-chat](https://github.com/omarshahine/obsidian-chat) by [Omar Shahine](https://github.com/omarshahine) (both MIT). Thank you! Chatting with AI is a mobile-friendly vault agent that also supports Anthropic and OpenAI API keys. Have a look at it.
+
+Adapted from it: keeping sign-in credentials in Obsidian's SecretStorage, the frontmatter tools `get_properties` and `set_properties`, `ask_user`, scoping a question to the editor selection, image attachments, and `rename_file`. Vault Scout implements them on its own and adds approval to every change. No code was copied.
 
 ## License
 

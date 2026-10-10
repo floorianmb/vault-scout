@@ -176,3 +176,72 @@
 .vault-scout-modal-buttons.is-start {
 	justify-content: flex-start;
 }
+
+.vault-scout-file-input {
+	display: none;
+}
+
+.vault-scout-composer .vault-scout-attach {
+	align-self: flex-end;
+}
+
+.vault-scout-attachments {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--size-4-2);
+}
+
+.vault-scout-pill {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-1);
+	padding: var(--size-2-1) var(--size-4-1) var(--size-2-1) var(--size-4-3);
+	border-radius: var(--radius-l);
+	background: var(--background-modifier-hover);
+	font-size: var(--font-ui-smaller);
+	max-width: 100%;
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+}
+
+.vault-scout-thumb {
+	position: relative;
+	width: 64px;
+	height: 64px;
+}
+
+.vault-scout-thumb img {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+	border-radius: var(--radius-s);
+}
+
+.vault-scout-thumb button {
+	position: absolute;
+	top: 2px;
+	right: 2px;
+	background: var(--background-primary);
+	border-radius: 50%;
+	padding: 2px;
+}
+
+.vault-scout-message-note {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	margin-top: var(--size-4-1);
+}
+
+.vault-scout-message-images {
+	display: flex;
+	gap: var(--size-4-1);
+	margin-top: var(--size-4-2);
+}
+
+.vault-scout-message-images img {
+	width: 72px;
+	height: 72px;
+	object-fit: cover;
+	border-radius: var(--radius-s);
+}

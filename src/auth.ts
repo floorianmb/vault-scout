@@ -14,8 +14,11 @@ const REDIRECT_URI = "http://127.0.0.1:1455/auth/callback";
 const PENDING_TTL = 30 * 60 * 1000;
 const REFRESH_MARGIN = 2 * 60 * 1000;
 
-// Device-local (localStorage), never synced: refresh tokens rotate on every
-// refresh, so two devices sharing one session would log each other out.
+// Never synced: refresh tokens rotate on every refresh, so two devices sharing
+// one session would log each other out. Tokens and the PKCE verifier live in
+// Obsidian's SecretStorage (the device keychain); the host and client IDs are
+// not secret and stay in the vault's localStorage. Idea from Chatting with AI
+// (github.com/o1xhack/obsidian-chatting).
 const KEY_HOST = "vault-scout-host-id";
 const KEY_CLIENT = "vault-scout-client-id";
 const KEY_CONNECTION = "vault-scout-connection";
@@ -146,11 +149,29 @@ export class ChatGPTAuth {
 	private refreshing: Promise<Connection> | undefined;
 	private listeners = new Set<() => void>();
 
-	constructor(private app: App) {}
+	constructor(private app: App) {
+		// Move sign-ins saved by earlier versions from localStorage into SecretStorage.
+		for (const key of [KEY_CONNECTION, KEY_PENDING]) {
+			const legacy: unknown = this.app.loadLocalStorage(key);
+			if (legacy === null || legacy === undefined) continue;
+			if (!this.readSecret(key)) this.writeSecret(key, legacy);
+			this.app.saveLocalStorage(key, null);
+		}
+	}
 
 	get connection(): Connection | undefined {
-		const stored = asRecord(this.app.loadLocalStorage(KEY_CONNECTION));
+		const stored = asRecord(this.readSecret(KEY_CONNECTION));
 		return stored && asString(stored.accessToken) ? (stored as unknown as Connection) : undefined;
+	}
+
+	private readSecret(key: string): unknown {
+		const raw = this.app.secretStorage.getSecret(key);
+		return raw ? parseJson(raw) : undefined;
+	}
+
+	/** SecretStorage has no delete; an empty string clears the entry. */
+	private writeSecret(key: string, value: unknown) {
+		this.app.secretStorage.setSecret(key, value === null || value === undefined ? "" : JSON.stringify(value));
 	}
 
 	onChange(listener: () => void): () => void {
@@ -163,7 +184,7 @@ export class ChatGPTAuth {
 		const { authorization_endpoint } = await discovery();
 		const pending: PendingSignIn = { state: randomValue(), nonce: randomValue(), verifier: randomValue(), createdAt: Date.now() };
 		// Persisted, because iOS may reload Obsidian while the user is in Safari.
-		this.app.saveLocalStorage(KEY_PENDING, pending);
+		this.writeSecret(KEY_PENDING, pending);
 		const clientId = this.savedClientId();
 		const url = new URL(authorization_endpoint);
 		url.search = new URLSearchParams({
@@ -186,7 +207,7 @@ export class ChatGPTAuth {
 
 	/** Finishes sign-in with the callback address the user copied from the browser. */
 	async completeSignIn(pasted: string): Promise<Connection> {
-		const pending = asRecord(this.app.loadLocalStorage(KEY_PENDING)) as PendingSignIn | undefined;
+		const pending = asRecord(this.readSecret(KEY_PENDING)) as PendingSignIn | undefined;
 		if (!pending || Date.now() - pending.createdAt > PENDING_TTL) {
 			throw new AuthError("no_pending_sign_in", "No sign-in is in progress. Open the sign-in page again.");
 		}
@@ -214,7 +235,7 @@ export class ChatGPTAuth {
 			redirect_uri: REDIRECT_URI,
 			resource: RESOURCE,
 		});
-		this.app.saveLocalStorage(KEY_PENDING, null);
+		this.writeSecret(KEY_PENDING, null);
 		const idToken = asString(data.id_token);
 		if (!idToken) throw new AuthError("invalid_id_token", "ChatGPT did not return an identity. Please sign in again.");
 		const claims = idTokenClaims(idToken, clientId, pending.nonce);
@@ -303,7 +324,7 @@ export class ChatGPTAuth {
 	}
 
 	private save(connection: Connection | undefined) {
-		this.app.saveLocalStorage(KEY_CONNECTION, connection ?? null);
+		this.writeSecret(KEY_CONNECTION, connection ?? null);
 		for (const listener of this.listeners) listener();
 	}
 

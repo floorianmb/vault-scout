@@ -1,11 +1,11 @@
 import { App, ButtonComponent, Modal } from "obsidian";
 
 export interface Change {
-	action: "create" | "edit" | "append";
+	action: "create" | "edit" | "append" | "properties" | "rename";
 	path: string;
-	/** Text that is replaced (edit only). */
+	/** Text that is replaced: the passage (edit), the old frontmatter (properties) or the old path (rename). */
 	before?: string;
-	/** New text: the whole note, the replacement or the appended part. */
+	/** New text: the whole note, the replacement, the appended part, the new frontmatter or the new path. */
 	after: string;
 	/** 1-based line where the edit starts. */
 	line?: number;
@@ -15,6 +15,8 @@ const TITLES: Record<Change["action"], string> = {
 	create: "Create note",
 	edit: "Edit note",
 	append: "Append to note",
+	properties: "Change properties",
+	rename: "Rename or move",
 };
 
 /** Shows a proposed change and resolves with the user's decision. */

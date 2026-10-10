@@ -1,5 +1,5 @@
 import { ButtonComponent, Component, DropdownComponent, ItemView, Keymap, MarkdownRenderer, Notice, Platform, setIcon, TFile, WorkspaceLeaf } from "obsidian";
-import { Agent } from "./agent";
+import { Agent, Selection } from "./agent";
 import { AuthError } from "./auth";
 import { Chat, ChatPickerModal, ChatTurn } from "./chats";
 import type VaultScoutPlugin from "./main";
@@ -43,6 +43,14 @@ function toolLabel(call: ToolCall): string {
 			return `Appending to ${arg("path")}`;
 		case "check_prism":
 			return `Checking Prism blocks in ${arg("path")}`;
+		case "get_properties":
+			return `Reading properties of ${arg("path")}`;
+		case "set_properties":
+			return `Updating properties of ${arg("path")}`;
+		case "rename_file":
+			return `Renaming ${arg("path")} → ${arg("new_path")}`;
+		case "ask_user":
+			return "Asking you a question";
 		case "load_skill":
 			return `Loading skill ${arg("name")}`;
 		case "read_skill_file":
@@ -65,6 +73,9 @@ export class ChatView extends ItemView {
 	private messageComponents: Component[] = [];
 	private abort: AbortController | undefined;
 	private streamingNoteShown = false;
+	private attachmentsEl!: HTMLElement;
+	private images: string[] = [];
+	private selection: Selection | undefined;
 
 	constructor(leaf: WorkspaceLeaf, private plugin: VaultScoutPlugin) {
 		super(leaf);
@@ -106,7 +117,15 @@ export class ChatView extends ItemView {
 		this.messagesEl = root.createDiv({ cls: "vault-scout-messages" });
 		this.registerDomEvent(this.messagesEl, "click", (evt) => this.openLink(evt));
 
+		this.attachmentsEl = root.createDiv({ cls: "vault-scout-attachments is-hidden" });
 		const composer = root.createDiv({ cls: "vault-scout-composer" });
+		// Images: the iOS picker offers the photo library, the camera and files.
+		const picker = composer.createEl("input", { cls: "vault-scout-file-input", attr: { type: "file", accept: "image/*", multiple: "" } });
+		this.registerDomEvent(picker, "change", () => {
+			void this.addImages(Array.from(picker.files ?? []));
+			picker.value = "";
+		});
+		this.iconButton(composer, "image-plus", "Attach images", () => picker.click()).addClass("vault-scout-attach");
 		this.inputEl = composer.createEl("textarea", { attr: { placeholder: "Ask about your notes…", rows: "3" } });
 		this.registerDomEvent(this.inputEl, "keydown", (evt) => {
 			if (evt.key === "Enter" && !evt.shiftKey && !evt.isComposing && !Platform.isMobile) {
@@ -124,6 +143,51 @@ export class ChatView extends ItemView {
 
 	override async onClose(): Promise<void> {
 		this.abort?.abort();
+	}
+
+	/** Scopes the next question to text selected in a note. */
+	setSelection(selection: Selection): void {
+		this.selection = selection;
+		this.renderAttachments();
+		this.inputEl.focus();
+	}
+
+	private async addImages(files: File[]) {
+		for (const file of files.slice(0, 4 - this.images.length)) {
+			try {
+				this.images.push(await imageDataUrl(file));
+			} catch {
+				new Notice(`${file.name} could not be read as an image.`);
+			}
+		}
+		this.renderAttachments();
+	}
+
+	private renderAttachments() {
+		const el = this.attachmentsEl;
+		el.empty();
+		el.toggleClass("is-hidden", !this.selection && !this.images.length);
+		const selection = this.selection;
+		if (selection) {
+			const pill = el.createDiv({ cls: "vault-scout-pill" });
+			pill.createSpan({ text: `Selection · ${selection.path.split("/").pop() ?? selection.path}, ${lineLabel(selection)}` });
+			const remove = pill.createEl("button", { cls: "clickable-icon", attr: { "aria-label": "Remove selection" } });
+			setIcon(remove, "x");
+			remove.addEventListener("click", () => {
+				this.selection = undefined;
+				this.renderAttachments();
+			});
+		}
+		this.images.forEach((url, index) => {
+			const thumb = el.createDiv({ cls: "vault-scout-thumb" });
+			thumb.createEl("img", { attr: { src: url, alt: `Attached image ${index + 1}` } });
+			const remove = thumb.createEl("button", { cls: "clickable-icon", attr: { "aria-label": "Remove image" } });
+			setIcon(remove, "x");
+			remove.addEventListener("click", () => {
+				this.images.splice(index, 1);
+				this.renderAttachments();
+			});
+		});
 	}
 
 	pickChat(): void {
@@ -204,17 +268,32 @@ export class ChatView extends ItemView {
 	}
 
 	private async submit() {
-		const text = this.inputEl.value.trim();
+		const text = this.inputEl.value.trim() || (this.images.length ? "What do you see in this image?" : "");
 		if (!text || this.abort) return;
 		if (!this.plugin.auth.connection) {
 			new SignInModal(this.app, this.plugin.auth).open();
 			return;
 		}
+		const images = this.images;
+		const selection = this.selection;
+		this.images = [];
+		this.selection = undefined;
+		this.renderAttachments();
 		this.inputEl.value = "";
-		this.messagesEl.createDiv({ cls: "vault-scout-message is-user", text });
+		const userEl = this.messagesEl.createDiv({ cls: "vault-scout-message is-user", text });
+		if (selection) userEl.createDiv({ cls: "vault-scout-message-note", text: `About ${selection.path}, ${lineLabel(selection)}` });
+		if (images.length) {
+			const strip = userEl.createDiv({ cls: "vault-scout-message-images" });
+			for (const url of images) strip.createEl("img", { attr: { src: url, alt: "Attached image" } });
+		}
 
 		const chat = this.chat;
-		const turn: ChatTurn = { user: text, steps: [], answer: "" };
+		// Saved chats keep a note of attachments; images themselves are not stored.
+		const notes = [
+			...(selection ? [`(About a selection in ${selection.path}, ${lineLabel(selection)})`] : []),
+			...(images.length ? [`(${images.length} image${images.length === 1 ? "" : "s"} attached)`] : []),
+		];
+		const turn: ChatTurn = { user: [text, ...notes].join("\n\n"), steps: [], answer: "" };
 		chat.turns.push(turn);
 		chat.model = this.plugin.settings.model;
 
@@ -233,7 +312,7 @@ export class ChatView extends ItemView {
 		};
 
 		try {
-			const incomplete = await this.agent.send(text, this.plugin.settings.model, this.plugin.settings.extraInstructions, {
+			const incomplete = await this.agent.send({ text, images, selection }, this.plugin.settings.model, this.plugin.settings.extraInstructions, {
 				onText: (delta) => {
 					streamed += delta;
 					bubble.setText(streamed);
@@ -327,5 +406,30 @@ class StepList {
 
 	finish() {
 		if (this.details) this.summary.setText(`${this.count} research step${this.count === 1 ? "" : "s"}`);
+	}
+}
+
+function lineLabel(selection: Selection): string {
+	return selection.fromLine === selection.toLine ? `line ${selection.fromLine}` : `lines ${selection.fromLine}-${selection.toLine}`;
+}
+
+const MAX_IMAGE_SIDE = 1600;
+
+/** Downscales a picked image to JPEG (phone photos are large) and returns it as a data URL. */
+async function imageDataUrl(file: File): Promise<string> {
+	try {
+		const bitmap = await createImageBitmap(file);
+		const scale = Math.min(1, MAX_IMAGE_SIDE / Math.max(bitmap.width, bitmap.height));
+		const canvas = createEl("canvas", { attr: { width: Math.round(bitmap.width * scale), height: Math.round(bitmap.height * scale) } });
+		canvas.getContext("2d")?.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+		bitmap.close();
+		return canvas.toDataURL("image/jpeg", 0.85);
+	} catch {
+		return await new Promise<string>((resolve, reject) => {
+			const reader = new FileReader();
+			reader.onload = () => (typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("unreadable")));
+			reader.onerror = () => reject(new Error("unreadable"));
+			reader.readAsDataURL(file);
+		});
 	}
 }
