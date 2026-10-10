@@ -28,7 +28,7 @@ export class VaultTools {
 				description:
 					"Full-text search over the vault's Markdown notes (title, path and content). All words must appear; " +
 					"if nothing matches, notes matching most words are returned. Use a few precise keywords, try synonyms " +
-					"and both German and English terms. Returns paths, frontmatter summary and matching snippets.",
+					"and the languages the notes are written in. Returns paths, frontmatter summary and matching snippets.",
 				parameters: {
 					type: "object",
 					properties: {
