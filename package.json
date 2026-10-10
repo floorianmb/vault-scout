@@ -1,6 +1,6 @@
 {
   "name": "vault-scout",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Research your vault with ChatGPT using your own ChatGPT plan, on desktop and mobile.",
   "main": "main.js",
   "private": true,
